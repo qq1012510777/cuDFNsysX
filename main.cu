@@ -18,7 +18,7 @@ int main(int argc, char *argv[])
     myDFN.FractureNormalDistributionFunctionPointer = &cuDFNsys::FractureNormalVectorGenerationFunctionUniform; // built-in function
     myDFN.GenerateFractureNormals(NormalRange);
 
-    double FracSizeUniformRange[2] = {1, 50};
+    double FracSizeUniformRange[2] = {1, 20};
     myDFN.FractureVerticesFunctionPointer = &cuDFNsys::FractureVerticesGenerationFunctionRegularTriangleUniformRadius; // built-in function
     myDFN.GenerateFractureVertices(FracSizeUniformRange);
 
@@ -43,6 +43,8 @@ int main(int argc, char *argv[])
     // for (int i = 0; i < myDFN.NumFractures; ++i)
     //     for (int j = 0; j < 3; ++j)
     //         std::cout << Double3Norm(myDFN.FractureVertices[i * 3 + j] - make_double3(0, 0, 0)) / Double3Norm(myDFN.FractureVertices[i * 3 + j] - myDFN.FractureVertices[i * 3 + (j + 1) % 3]) << (j == 2 ? "\n" : ", ");
+
+    myDFN.IdentifyIntersectedFractures();
 
     std::string h5name = "DFNGen.h5";
     std::string xmfname = "DFNGen.xmf";

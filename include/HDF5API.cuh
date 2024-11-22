@@ -105,6 +105,53 @@ namespace cuDFNsys
         }
     };
 
+    void WriteInt2ToHDF5(const std::string &filename,
+                         const std::string &datasetName,
+                         const int2 *data, const int &n, const bool &AddDataSet)
+    {
+        try
+        {
+            // Define dimensions
+            // hsize_t n = data.size();  // Number of elements in the vector
+            hsize_t dims[2] = {(hsize_t)n, 2}; // n x 3 dataset
+
+            // Convert vector<double3> to a simple array for HDF5
+            std::vector<int> flatData;
+            flatData.resize(n * 2);
+            for (int i = 0; i < n * 2; i += 2)
+            {
+                flatData[i] = data[(i / 2)].x;
+                flatData[i + 1] = data[(i / 2)].y;
+            }
+
+            // Create HDF5 file
+            H5::H5File file(filename, (AddDataSet == false ? H5F_ACC_TRUNC : H5F_ACC_RDWR));
+
+            // Create dataspace with specified dimensions
+            H5::DataSpace dataspace(2, dims);
+
+            // Create dataset for double data type
+            H5::DataSet dataset = file.createDataSet(datasetName, H5::PredType::NATIVE_INT, dataspace);
+
+            // Write data to dataset
+            dataset.write(flatData.data(), H5::PredType::NATIVE_INT);
+
+            file.close();
+        }
+        catch (H5::FileIException &error)
+        {
+            error.printErrorStack();
+        }
+        catch (H5::DataSetIException &error)
+        {
+            error.printErrorStack();
+        }
+        catch (H5::DataSpaceIException &error)
+        {
+            error.printErrorStack();
+        }
+    };
+
     void WriteDoubleToHDF5(const std::string &filename,
                            const std::string &datasetName,
                            const double *data, const int &n, const bool &AddDataSet)
@@ -112,7 +159,7 @@ namespace cuDFNsys
         try
         {
             // Define dimensions
-            //hsize_t n = data.size();  // Number of elements in the vector
+            // hsize_t n = data.size();  // Number of elements in the vector
             hsize_t dims[2] = {(hsize_t)n, 1}; // n x 3 dataset
 
             // Convert vector<double3> to a simple array for HDF5
@@ -153,7 +200,7 @@ namespace cuDFNsys
         try
         {
             // Define dimensions
-            //hsize_t n = data.size();  // Number of elements in the vector
+            // hsize_t n = data.size();  // Number of elements in the vector
             hsize_t dims[2] = {(hsize_t)n, 1}; // n x 3 dataset
 
             // Convert vector<double3> to a simple array for HDF5

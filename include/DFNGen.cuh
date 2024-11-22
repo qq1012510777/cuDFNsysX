@@ -7,12 +7,16 @@
 #include <thrust/random.h>
 #include <string>
 #include <fstream>
+#include <omp.h>
+#include <thrust/remove.h>
 
 #include "PDF.cuh"
 #include "Operators.cuh"
 #include "Quaternion.cuh"
 #include "FunctionGenFractureAttributes.cuh"
 #include "HDF5API.cuh"
+
+#include "FractureIntersectionCheckOCCT.cuh"
 
 __global__ void GenerateVertices() {
 
@@ -31,13 +35,16 @@ namespace cuDFNsys
         thrust::host_vector<double3> NormalVec;
         thrust::host_vector<double3> FractureVertices;
         thrust::host_vector<double3> TruncatedFractureVertices;
-        thrust::host_vector<int4> VerticesIndex;
+        thrust::host_vector<int4> VerticesIndex;             // vertice label from 0
+        thrust::host_vector<int2> IntersectionFracturePairs; // fracture label from 0
 
         unsigned long RandomSeed = 0;
 
         // should be defined before gen
         int NumFractures = 0;
         // thrust::host_vector<int> NumVerticesEachFracture;
+        int NumFracturePairsCheckAtOnce = 256;
+        int Nproc = 10;
 
     public:
         DFNGen() {};
@@ -50,6 +57,68 @@ namespace cuDFNsys
 
         int (*FractureVerticesFunctionPointer)(const double *rand_0_1, const double *Para, double3 *vertices);
         void GenerateFractureVertices(const double *Para);
+
+        void IdentifyIntersectedFractures()
+        {
+            // Generate Pairs
+            thrust::host_vector<int2> TotalPair(
+
+                this->NumFractures * floor((this->NumFractures - 1) / 2) + (this->NumFractures - 1) % 2 * this->NumFractures * 0.5);
+
+            for (int i = 0; i < TotalPair.size(); ++i)
+            {
+                TotalPair[i].x = floor((pow(2 * (i + 1), 0.5) + 1 / 2.0));
+                TotalPair[i].y = i - 0.5 * TotalPair[i].x * (TotalPair[i].x - 1);
+            }
+
+            int NumFracturePairTotal = this->NumFractures * floor((this->NumFractures - 1) / 2) + (this->NumFractures - 1) % 2 * this->NumFractures * 0.5;
+
+            for (int i = 0; i < NumFracturePairTotal; i += NumFracturePairsCheckAtOnce)
+            {
+                int HowManyPairsCheck = (i + NumFracturePairsCheckAtOnce >= NumFracturePairTotal ? NumFracturePairTotal : i + NumFracturePairsCheckAtOnce) - i;
+
+                thrust::host_vector<int2> SubPair(HowManyPairsCheck, make_int2(-1, -1));
+#pragma omp parallel for schedule(dynamic) num_threads(this->Nproc)
+                for (int j = i; j < i + HowManyPairsCheck; ++j)
+                {
+                    int x_ = floor((pow(2 * (j + 1), 0.5) + 1 / 2.0));
+                    int y_ = j - 0.5 * x_ * (x_ - 1);
+
+                    thrust::host_vector<double3> FractureV1(this->FractureVertices.begin() + this->VerticesIndex[x_].x,
+                                                            this->FractureVertices.begin() + this->VerticesIndex[x_].y + 1);
+                    thrust::host_vector<double3> FractureV2(this->FractureVertices.begin() + this->VerticesIndex[y_].x,
+                                                            this->FractureVertices.begin() + this->VerticesIndex[y_].y + 1);
+
+                    thrust::host_vector<double3> IntersectionEdge;
+                    bool If_intersect = cuDFNsys::FractureIntersectionCheckOCCT(FractureV1.data(), FractureV2.data(), this->VerticesIndex[x_].y - this->VerticesIndex[x_].x + 1,
+                                                                                this->VerticesIndex[y_].y - this->VerticesIndex[y_].x + 1, false, IntersectionEdge);
+                    if (If_intersect)
+                        SubPair[j - i] = make_int2(x_, y_);
+
+                    // std::cout << x_ << ", " << y_ << ", " << If_intersect << "\n";
+                    // for (auto e : FractureV1)
+                    //     std::cout << e << " ";
+                    // std::cout << "\n";
+                    // for (auto e : FractureV2)
+                    //     std::cout << e << " ";
+                    // std::cout << "\n";
+                }
+
+                auto new_end = thrust::remove_if(
+                    SubPair.begin(),
+                    SubPair.end(),
+                    [](const int2 &pair)
+                    {
+                        return pair.x == -1; // Predicate to remove elements where .x == -1
+                    });
+                SubPair.erase(new_end, SubPair.end());
+                IntersectionFracturePairs.insert(IntersectionFracturePairs.end(), SubPair.begin(), SubPair.end());
+            }
+
+            // for (auto e : IntersectionFracturePairs)
+            //     std::cout << e << " ";
+            // std::cout << "\n";
+        };
 
         void OutputDFNGen(const std::string HDF5filename);
         void OutputXMF(const std::string XMFfilename, const std::string HDF5filename);
@@ -140,7 +209,7 @@ namespace cuDFNsys
             // rotate to normal
             double3 RotationAxis = Double3CrossProduct(make_double3(0, 0, 1), this->NormalVec[i]);
             RotationAxis = RotationAxis / Double3Norm(RotationAxis);
-            ff2 = ff2.DescribeRotation(RotationAxis, this->NormalVec[i].z);
+            ff2 = ff2.DescribeRotation(RotationAxis, acos(this->NormalVec[i].z));
 
             for (int j = 0; j < NumVertices; ++j)
             {
@@ -172,11 +241,18 @@ namespace cuDFNsys
         cuDFNsys::WriteDouble3ToHDF5(HDF5filename, "TruncatedFractureVertices", TruncatedFractureVertices.data(), TruncatedFractureVertices.size(), true);
 
         cuDFNsys::WriteInt4ToHDF5(HDF5filename, "VerticesIndex", VerticesIndex.data(), VerticesIndex.size(), true);
+        cuDFNsys::WriteInt2ToHDF5(HDF5filename, "IntersectionFracturePairs", IntersectionFracturePairs.data(),
+                                  IntersectionFracturePairs.size(), true);
 
         int Tem[1] = {(int)RandomSeed};
         cuDFNsys::WriteIntToHDF5(HDF5filename, "RandomSeed", Tem, 1, true);
         Tem[0] = NumFractures;
         cuDFNsys::WriteIntToHDF5(HDF5filename, "NumFractures", Tem, 1, true);
+
+        Tem[0] = NumFracturePairsCheckAtOnce;
+        cuDFNsys::WriteIntToHDF5(HDF5filename, "NumFracturePairsCheckAtOnce", Tem, 1, true);
+        Tem[0] = Nproc;
+        cuDFNsys::WriteIntToHDF5(HDF5filename, "Nproc", Tem, 1, true);
     };
 
     void cuDFNsys::DFNGen::OutputXMF(const std::string XMFfilename, const std::string HDF5filename)
@@ -234,7 +310,11 @@ namespace cuDFNsys
         xmfFile << "          " << HDF5filename << ":/Aperture\n";
         xmfFile << "        </DataItem>\n";
         xmfFile << "      </Attribute>\n";
-
+        xmfFile << "      <Attribute Name=\"Fracture normal vector\" AttributeType=\"Vector\" Center=\"Cell\">\n";
+        xmfFile << "        <DataItem Format=\"HDF\" DataType=\"Float\" Precision=\"8\" Dimensions=\"" << this->NumFractures << " 3\">\n";
+        xmfFile << "          " << HDF5filename << ":/NormalVec\n";
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Attribute>\n";
         xmfFile << "   </Grid>\n";
         xmfFile << "  </Domain>\n";
         xmfFile << "</Xdmf>\n";

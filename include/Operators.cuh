@@ -35,3 +35,10 @@ __host__ __device__ double3 operator+(const double3 &vec, const double3 &vec2)
 {
     return make_double3(vec.x + vec2.x, vec.y + vec2.y, vec.z + vec2.z);
 }
+
+// int2
+std::ostream &operator<<(std::ostream &os, const int2 &v)
+{
+    os << "(" << v.x << ", " << v.y << ")";
+    return os;
+}

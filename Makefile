@@ -6,7 +6,7 @@ Mesh_INCDIRS=-I $(Hdf5IncludePath) \
 		-I $(EigenIncludePath) \
 		-I /usr/local/include \
         -I $(UmfpackIncludePath) \
-		-I ./include
+		-I ./include -I/usr/include/opencascade
 
 Mesh_Lib_= -Xcompiler=-fopenmp \
 	-lpthread \
@@ -26,7 +26,9 @@ Mesh_Lib_= -Xcompiler=-fopenmp \
 	-ldl \
 	-L$(GmshLibraryPath) \
 	-L$(Hdf5LibraryPath) \
- 	-L$(UmfpackLibraryPath)
+ 	-L$(UmfpackLibraryPath) \
+	-L/usr/lib/x86_64-linux-gnu \
+	-lTKernel -lTKBO -lTKBRep -lTKGeomBase -lTKG2d -lTKG3d -lTKMath -lTKBool -lTKTopAlgo
 
 all: main
 
