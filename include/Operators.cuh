@@ -5,7 +5,7 @@
 // double3
 std::ostream &operator<<(std::ostream &os, const double3 &v)
 {
-    os << "(" << v.x << ", " << v.y << ", " << v.z << ")";
+    os << v.x << ", " << v.y << ", " << v.z << "; ";
     return os;
 }
 __host__ __device__ double3 Double3CrossProduct(const double3 &u, const double3 &v)
@@ -18,6 +18,10 @@ __host__ __device__ double3 Double3CrossProduct(const double3 &u, const double3 
 __host__ __device__ double Double3Norm(const double3 &v)
 {
     return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+__host__ __device__ double Double3Dot(const double3 &v, const double3 &w)
+{
+    return (v.x * w.x + v.y * w.y + v.z * w.z);
 }
 __host__ __device__ double3 operator/(const double3 &vec, double scalar)
 {

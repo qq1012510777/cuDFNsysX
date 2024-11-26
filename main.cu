@@ -7,20 +7,30 @@ int main(int argc, char *argv[])
 
     cuDFNsys::DFNGen myDFN;
     myDFN.RandomSeed = (unsigned long)t;
+    myDFN.InitRandomEngine();
+    
+    myDFN.NumFracturePairsCheckAtOnce = 1000000;
+    myDFN.Nproc = 20;
 
     myDFN.NumFractures = atoi(argv[1]);
-    double FractureCenterLimit[6] = {0, 100, 0, 100, 0, 100};
+    double FractureCenterLimit[6] = {0, 1, 0, 1, 0, 1};
 
+    double iStart = cuDFNsys::CPUSecond();
     myDFN.FractureLocationDistributionFunctionPointer = &cuDFNsys::FractureLocationGenerationFunctionUniform; // built-in function
     myDFN.GenerateFractureLocations(FractureCenterLimit);
+    std::cout << "Using " << cuDFNsys::CPUSecond() - iStart << " seconds GenerateFractureLocations\n";
 
+    iStart = cuDFNsys::CPUSecond();
     double NormalRange[6] = {-1, 1, -1, 1, -1, 1};
     myDFN.FractureNormalDistributionFunctionPointer = &cuDFNsys::FractureNormalVectorGenerationFunctionUniform; // built-in function
     myDFN.GenerateFractureNormals(NormalRange);
+    std::cout << "Using " << cuDFNsys::CPUSecond() - iStart << " seconds GenerateFractureNormals\n";
 
-    double FracSizeUniformRange[2] = {1, 20};
+    iStart = cuDFNsys::CPUSecond();
+    double FracSizeUniformRange[2] = {atof(argv[2]), atof(argv[3])};
     myDFN.FractureVerticesFunctionPointer = &cuDFNsys::FractureVerticesGenerationFunctionRegularTriangleUniformRadius; // built-in function
     myDFN.GenerateFractureVertices(FracSizeUniformRange);
+    std::cout << "Using " << cuDFNsys::CPUSecond() - iStart << " seconds GenerateFractureVertices\n";
 
     // define aperture and conductivity
     // for example, b = 1e-10 * raidusOfCircumscribed ^ 0.3
@@ -44,7 +54,13 @@ int main(int argc, char *argv[])
     //     for (int j = 0; j < 3; ++j)
     //         std::cout << Double3Norm(myDFN.FractureVertices[i * 3 + j] - make_double3(0, 0, 0)) / Double3Norm(myDFN.FractureVertices[i * 3 + j] - myDFN.FractureVertices[i * 3 + (j + 1) % 3]) << (j == 2 ? "\n" : ", ");
 
+    iStart = cuDFNsys::CPUSecond();
     myDFN.IdentifyIntersectedFractures();
+    std::cout << "Using " << cuDFNsys::CPUSecond() - iStart << " seconds IdentifyIntersectedFractures\n";
+
+    myDFN.IdentifyFractureClusters();
+
+    myDFN.TruncateFracturesByStlDomain(std::string(argv[4]));
 
     std::string h5name = "DFNGen.h5";
     std::string xmfname = "DFNGen.xmf";

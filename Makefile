@@ -28,7 +28,7 @@ Mesh_Lib_= -Xcompiler=-fopenmp \
 	-L$(Hdf5LibraryPath) \
  	-L$(UmfpackLibraryPath) \
 	-L/usr/lib/x86_64-linux-gnu \
-	-lTKernel -lTKBO -lTKBRep -lTKGeomBase -lTKG2d -lTKG3d -lTKMath -lTKBool -lTKTopAlgo
+	-lTKernel -lTKBO -lTKBRep -lTKGeomBase -lTKG2d -lTKG3d -lTKMath -lTKBool -lTKTopAlgo -lTKSTL
 
 all: main
 
@@ -42,7 +42,7 @@ main: ./main.cu
 	-Xcudafe --diag_suppress=3060 \
 	-Xcudafe --diag_suppress=3058 \
 	-Xcudafe --diag_suppress=3056 \
-	-arch=sm_60 -std=c++17 -rdc=true
+	-arch=sm_60 -std=c++17 -rdc=true --extended-lambda
 
 
 clean:
