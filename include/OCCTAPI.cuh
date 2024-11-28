@@ -35,6 +35,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <unordered_set>
 #include <functional>
+#include <BRepClass3d_SolidClassifier.hxx>
 
 #include "CorrectPolygon.cuh"
 #include <iostream>
@@ -164,7 +165,7 @@ namespace cuDFNsys
         }
     };
 
-    TopoDS_Solid LoadAStlDomain(const std::string &stlname)
+    TopoDS_Solid LoadAStlDomain(const std::string &stlname, const bool &IfReverse = true)
     {
         // Load STL file as faces
         StlAPI_Reader reader;
@@ -196,8 +197,8 @@ namespace cuDFNsys
             throw std::runtime_error("Error: In cuDFNsy::LoadAStlDomain, The shell is not valid or closed. Cannot create a solid.\n");
         }
 
-        TopAbs_Orientation orientation = shell.Orientation();
-        if (orientation == TopAbs_FORWARD)
+        // TopAbs_Orientation orientation = shell.Orientation();
+        if (IfReverse)
         {
             shell.Orientation(TopAbs_REVERSED); // Adjust if necessary
         }
@@ -228,6 +229,21 @@ namespace cuDFNsys
         // bbox.Get(Xmin, Ymin, Zmin, Xmax, Ymax, Zmax);
         // std::cout << Xmin << ", " << Ymin << ", " << Zmin << ", " << Xmax << ", " << Ymax << ", " << Zmax << std::endl;
         return solid;
+    }
+
+    bool IsPointInsideSolid(const TopoDS_Solid &solid, const gp_Pnt &point, double tolerance = 1.0e-7)
+    {
+        // Create a solid classifier
+        BRepClass3d_SolidClassifier solidClassifier(solid);
+
+        // Perform classification with point and tolerance
+        solidClassifier.Perform(point, tolerance);
+
+        // Check the result of the classification
+        TopAbs_State state = solidClassifier.State();
+
+        // Return true if the point is inside the solid
+        return (state == TopAbs_IN);
     }
 
     TopoDS_Face FractureToTopoDS_Face(const double3 *Vertices, const int &NumVertices)
@@ -282,29 +298,18 @@ namespace cuDFNsys
                 return NewPolygon; // Return empty if no intersection
             }
 
-            // Traverse the resulting faces and extract vertices
-            // for (TopExp_Explorer exp(resultShape, TopAbs_FACE); exp.More(); exp.Next())
-            // {
-            //     TopoDS_Face intersectedFace = TopoDS::Face(exp.Current());
-            //     for (TopExp_Explorer exWire(intersectedFace, TopAbs_VERTEX); exWire.More(); exWire.Next())
-            //     {
-            //         gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(exWire.Current()));
-            //         NewPolygon.push_back(make_double3(point.X(), point.Y(), point.Z()));
-            //     }
-            // }
+            int countEdge = 0;
+            for (TopExp_Explorer exp(resultShape, TopAbs_EDGE); exp.More(); exp.Next())
+                countEdge++;
+            NewPolygon.reserve(countEdge * 3);
 
-            // TopAbs_Orientation orientation = resultShape.Orientation();
-            // if (orientation == TopAbs_FORWARD)
-            // {
-            //     resultShape.Orientation(TopAbs_REVERSED); // Adjust if necessary
-            // }
-            std::cout << resultShape.ShapeType() << std::endl;
             for (TopExp_Explorer exp(resultShape, TopAbs_VERTEX); exp.More(); exp.Next())
             {
                 gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(exp.Current()));
                 NewPolygon.push_back(make_double3(point.X(), point.Y(), point.Z()));
             }
-            NewPolygon = CorrectPolygon(NewPolygon);
+            NewPolygon.shrink_to_fit();
+            NewPolygon = CorrectPolygon(NewPolygon, 1e-3);
         }
         else
         {

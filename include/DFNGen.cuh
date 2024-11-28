@@ -10,6 +10,7 @@
 #include <omp.h>
 #include <thrust/remove.h>
 #include <thrust/functional.h>
+#include <thrust/count.h>
 
 #include "CPUSecond.cuh"
 #include "PDF.cuh"
@@ -64,39 +65,10 @@ namespace cuDFNsys
         int (*FractureVerticesFunctionPointer)(const double *rand_0_1, const double *Para, double3 *vertices);
         void GenerateFractureVertices(const double *Para);
 
-        void IdentifyIntersectedFractures();
+        void IdentifyIntersectedFractures(const bool &IfConsiderTruncatedFractures = false);
         void IdentifyFractureClusters();
 
-        void TruncateFracturesByStlDomain(const std::string &stlname)
-        {
-            TopoDS_Solid Domain_stl = cuDFNsys::LoadAStlDomain(stlname);
-
-            for (int i = 0; i < this->NumFractures; ++i)
-            {
-                int NumVertices = this->VerticesIndex[i].y - this->VerticesIndex[i].x + 1;
-                double3 *V[NumVertices];
-                for (int j = 0; j < NumVertices; ++j)
-                    V[j] = &(this->FractureVertices[this->VerticesIndex[i].x + j]);
-
-                std::cout << "Frac i = " << i << "\n";
-                for (int j = 0; j < NumVertices; ++j)
-                    std::cout << *V[j] << " ";
-                std::cout << "\n";
-
-                TopoDS_Face Polygon = cuDFNsys::FractureToTopoDS_Face(*V, NumVertices);
-                thrust::host_vector<double3> NewFrac = cuDFNsys::TruncatePolygon(Polygon, Domain_stl);
-
-                std::cout << "Frac i after truncation = " << i << "\n";
-                for (auto e : NewFrac)
-                    std::cout << e << " ";
-                std::cout << "\n\n";
-
-                this->VerticesIndex[i].z = this->TruncatedFractureVertices.size();
-                this->VerticesIndex[i].w = this->TruncatedFractureVertices.size() + NewFrac.size() - 1;
-                this->TruncatedFractureVertices.insert(this->TruncatedFractureVertices.end(), NewFrac.begin(), NewFrac.end());
-                
-            }
-        };
+        void TruncateFracturesByStlDomain(const std::string &stlname);
 
         void OutputDFNGen(const std::string HDF5filename);
         void OutputXMF(const std::string XMFfilename, const std::string HDF5filename);
@@ -213,11 +185,13 @@ namespace cuDFNsys
         this->Aperture.resize(this->NumFractures);
     };
 
-    void cuDFNsys::DFNGen::IdentifyIntersectedFractures()
+    void cuDFNsys::DFNGen::IdentifyIntersectedFractures(const bool &IfConsiderTruncatedFractures)
     {
 
         if (!this->IfUsingGPUCheckFracturesIntersect)
         { // Generate Pairs
+            throw std::runtime_error("Wrong, CPU identification of intersecting fractures is slow and not finished\n");
+
             thrust::host_vector<int2> TotalPair(
                 this->NumFractures * floor((this->NumFractures - 1) / 2) + (this->NumFractures - 1) % 2 * this->NumFractures * 0.5);
 
@@ -279,17 +253,31 @@ namespace cuDFNsys
         {
             int NumFracturePairTotal = this->NumFractures * floor((this->NumFractures - 1) / 2) + (this->NumFractures - 1) % 2 * this->NumFractures * 0.5;
 
-            thrust::device_vector<double3> FractureVertices_DEV = this->FractureVertices;
+            thrust::device_vector<double3> FractureVertices_DEV;
+            if (!IfConsiderTruncatedFractures)
+                FractureVertices_DEV = this->FractureVertices;
+            else
+                FractureVertices_DEV = this->TruncatedFractureVertices;
+
             thrust::device_vector<int4> VerticesIndex_DEV = this->VerticesIndex;
             thrust::device_vector<int2> IntersectionFracturePairs_DEV(NumFracturePairTotal, make_int2(-1, -1));
+
+            // std::cout << "FractureVertices_DEV = " << std::endl;
+            // for (auto e : FractureVertices_DEV)
+            //     std::cout << e <<", ";
+            // std::cout << "\n";
 
             double3 *FractureVertices_DEV_ptr = thrust::raw_pointer_cast(FractureVertices_DEV.data());
             int4 *VerticesIndex_DEV_ptr = thrust::raw_pointer_cast(VerticesIndex_DEV.data());
             int2 *IntersectionFracturePairs_DEV_ptr = thrust::raw_pointer_cast(IntersectionFracturePairs_DEV.data());
-
-            cuDFNsys::DeviceIfFracturesIntersect<<<NumFracturePairTotal / 256 + 1, 256>>>(NumFracturePairTotal, FractureVertices_DEV_ptr, VerticesIndex_DEV_ptr, IntersectionFracturePairs_DEV_ptr);
+            // std::cout << "1\n";
+            cuDFNsys::DeviceIfFracturesIntersect<<<NumFracturePairTotal / 256 + 1, 256>>>(NumFracturePairTotal,
+                                                                                          FractureVertices_DEV_ptr,
+                                                                                          VerticesIndex_DEV_ptr,
+                                                                                          IntersectionFracturePairs_DEV_ptr,
+                                                                                          IfConsiderTruncatedFractures);
             cudaDeviceSynchronize();
-
+            // std::cout << "2\n";
             auto new_end = thrust::remove_if(
                 IntersectionFracturePairs_DEV.begin(),
                 IntersectionFracturePairs_DEV.end(),
@@ -300,7 +288,7 @@ namespace cuDFNsys
             // // Resize the vector to remove the "removed" elements
             IntersectionFracturePairs_DEV.erase(new_end, IntersectionFracturePairs_DEV.end());
             this->IntersectionFracturePairs = IntersectionFracturePairs_DEV;
-
+            // std::cout << "3\n";
             // for (auto e : IntersectionFracturePairs)
             //     std::cout << e << " ";
             // std::cout << "\n";
@@ -311,6 +299,115 @@ namespace cuDFNsys
     {
         cuDFNsys::Graph G(this->NumFractures, this->IntersectionFracturePairs);
         G.UseDFS(this->FractureClusters);
+    };
+
+    void cuDFNsys::DFNGen::TruncateFracturesByStlDomain(const std::string &stlname)
+    {
+
+        this->TruncatedFractureVertices.clear();
+
+        TopoDS_Solid Domain_stl = cuDFNsys::LoadAStlDomain(stlname);
+
+        //-------------test once
+        {
+            int NumVertices = this->VerticesIndex[0].y - this->VerticesIndex[0].x + 1;
+            double3 V[NumVertices];
+
+            for (int j = 0; j < NumVertices; ++j)
+                V[j] = this->FractureVertices[this->VerticesIndex[0].x + j];
+
+            TopoDS_Face Polygon = cuDFNsys::FractureToTopoDS_Face(V, NumVertices);
+            thrust::host_vector<double3> NewFrac = cuDFNsys::TruncatePolygon(Polygon, Domain_stl);
+
+            bool IsInsideP = false;
+            for (int j = 0; j < NewFrac.size(); ++j)
+            {
+                gp_Pnt P_d(NewFrac[j].x, NewFrac[j].y, NewFrac[j].z);
+                bool IfPointInSolid = IsPointInsideSolid(Domain_stl, P_d);
+
+                if (IfPointInSolid)
+                {
+                    IsInsideP = true;
+                    break;
+                }
+            }
+            if (!IsInsideP)
+            {
+                std::cout << "I will change the orientation of the domain's shell~\n";
+                Domain_stl = cuDFNsys::LoadAStlDomain(stlname, false);
+            }
+        }
+        //----------------------
+
+        thrust::host_vector<thrust::host_vector<double3>> FractureTruncated(this->NumFractures);
+
+#pragma omp parallel for schedule(static) num_threads(this->Nproc)
+        for (int i = 0; i < this->NumFractures; ++i)
+        {
+            int NumVertices = this->VerticesIndex[i].y - this->VerticesIndex[i].x + 1;
+            double3 V[NumVertices];
+
+            for (int j = 0; j < NumVertices; ++j)
+                V[j] = this->FractureVertices[this->VerticesIndex[i].x + j];
+
+            // std::cout << "Frac i = " << i << "\n";
+            // for (int j = 0; j < NumVertices; ++j)
+            //     std::cout << *V[j] << " ";
+            // std::cout << "\n";
+
+            TopoDS_Face Polygon = cuDFNsys::FractureToTopoDS_Face(V, NumVertices);
+            thrust::host_vector<double3> NewFrac = cuDFNsys::TruncatePolygon(Polygon, Domain_stl);
+
+            // std::cout << "Frac i after truncation = " << i << "\n";
+            // for (auto e : NewFrac)
+            //     std::cout << e << " ";
+            // std::cout << "\n\n";
+
+            if (NewFrac.size() != 0)
+            {
+                // this->VerticesIndex[i].z = this->TruncatedFractureVertices.size();
+                // this->VerticesIndex[i].w = this->TruncatedFractureVertices.size() + NewFrac.size() - 1;
+                this->VerticesIndex[i].z = 0; // this->TruncatedFractureVertices.size();
+                this->VerticesIndex[i].w = NewFrac.size() - 1;
+                // this->TruncatedFractureVertices.size() + NewFrac.size() - 1;
+                FractureTruncated[i] = NewFrac;
+                // this->TruncatedFractureVertices.insert(this->TruncatedFractureVertices.end(), NewFrac.begin(), NewFrac.end());
+            }
+            else
+            {
+                this->VerticesIndex[i].z = -1;
+                this->VerticesIndex[i].w = -1;
+            }
+        }
+
+        int SizeTruncatedFractureVertices = 0;
+        for (const auto &e : this->VerticesIndex)
+            if (e.z != -1)
+                SizeTruncatedFractureVertices += (e.w - e.z + 1);
+
+        this->TruncatedFractureVertices.resize(SizeTruncatedFractureVertices);
+        int counterYY = 0;
+        // std::cout << "SizeTruncatedFractureVertices = " << SizeTruncatedFractureVertices << std::endl;
+        for (int i = 0; i < this->NumFractures; ++i)
+        {
+            // std::cout << VerticesIndex[i] << std::endl;
+
+            if (this->VerticesIndex[i].w != -1)
+            {
+                this->VerticesIndex[i].z = counterYY;
+
+                for (const auto &e : FractureTruncated[i])
+                {
+                    // std::cout << counterYY << ", ";
+                    this->TruncatedFractureVertices[counterYY] = e,
+                    counterYY++;
+                }
+                // std::cout << ", ----\n";
+                this->VerticesIndex[i].w = counterYY - 1;
+                if (counterYY > SizeTruncatedFractureVertices)
+                    throw std::runtime_error("Wrong in allocate values to `this->TruncatedFractureVertices`\n");
+            }
+        }
     };
 
     void cuDFNsys::DFNGen::OutputDFNGen(const std::string HDF5filename)
@@ -356,7 +453,7 @@ namespace cuDFNsys
         for (int i = 0; i < this->VerticesIndex.size(); ++i)
             Dimension_allF = Dimension_allF + (this->VerticesIndex[i].y - this->VerticesIndex[i].x) + 3;
 
-        thrust::host_vector<int> ScalarValue_cluster(this->NumFractures);
+        thrust::host_vector<int> ScalarValue_cluster(this->NumFractures, -1);
         for (int i = 0; i < this->FractureClusters.size(); ++i)
             for (int j = 0; j < this->FractureClusters[i].size(); ++j)
                 ScalarValue_cluster[this->FractureClusters[i][j]] = i;
@@ -378,7 +475,7 @@ namespace cuDFNsys
         xmfFile << "        <DataItem Dimensions=\"" << Dimension_allF << "\" Format=\"XML\">\n";
         for (int i = 0; i < this->VerticesIndex.size(); ++i)
         {
-            xmfFile << "          3 3 ";
+            xmfFile << "          3 " << this->VerticesIndex[i].y - this->VerticesIndex[i].x + 1 << " ";
             for (int j = 0;; j++)
             {
                 xmfFile << this->VerticesIndex[i].x + j;
@@ -409,11 +506,88 @@ namespace cuDFNsys
         xmfFile << "        </DataItem>\n";
         xmfFile << "      </Attribute>\n";
 
-        xmfFile << "      <Attribute Name=\"Cluster\" AttributeType=\"Scalar\" Center=\"Cell\">\n";
+        xmfFile << "      <Attribute Name=\"ClusterID\" AttributeType=\"Scalar\" Center=\"Cell\">\n";
         xmfFile << "        <DataItem Dimensions=\"" << this->NumFractures << "\" Format=\"XML\" NumberType=\"Float\" Precision=\"8\">\n";
         xmfFile << "          ";
         for (int i = 0; i < ScalarValue_cluster.size(); ++i)
             xmfFile << ScalarValue_cluster[i] << (i == ScalarValue_cluster.size() - 1 ? "\n" : " ");
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Attribute>\n";
+
+        xmfFile << "   </Grid>\n";
+
+        //--------------truncated fractures --------------------------
+        xmfFile << "   <Grid Name=\"DFN_Truncated_Fractures\">\n";
+        xmfFile << "      <Geometry GeometryType=\"XYZ\">\n";
+        xmfFile << "        <DataItem Format=\"HDF\" DataType=\"Float\" Precision=\"8\" Dimensions=\"" << this->TruncatedFractureVertices.size() << " 3\">\n";
+        xmfFile << "          " << HDF5filename << ":/TruncatedFractureVertices\n";
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Geometry>\n";
+        xmfFile << "\n";
+
+        int NumTruncatedFractures = 0;
+        Dimension_allF = 0;
+        for (int i = 0; i < this->VerticesIndex.size(); ++i)
+            if (this->VerticesIndex[i].z != -1)
+            {
+                NumTruncatedFractures++;
+                Dimension_allF = Dimension_allF + (this->VerticesIndex[i].w - this->VerticesIndex[i].z) + 3;
+            }
+
+        xmfFile << "      <!-- Topology: Mixed polygons -->\n";
+        xmfFile << "      <Topology TopologyType=\"Mixed\" NumberOfElements=\"" << NumTruncatedFractures << "\">\n";
+        xmfFile << "        <DataItem Dimensions=\"" << Dimension_allF << "\" Format=\"XML\">\n";
+
+        int countergg = 0;
+        thrust::host_vector<double> ScalarConductivityTruncated(NumTruncatedFractures);
+        thrust::host_vector<double> ScalarApertureTruncated(NumTruncatedFractures);
+        thrust::host_vector<int> ScalarClusterIDTruncated(NumTruncatedFractures, -1);
+
+        for (int i = 0; i < this->VerticesIndex.size(); ++i)
+        {
+            if (this->VerticesIndex[i].w == -1)
+                continue;
+
+            xmfFile << "          3 " << this->VerticesIndex[i].w - this->VerticesIndex[i].z + 1 << " ";
+            for (int j = 0;; j++)
+            {
+                xmfFile << this->VerticesIndex[i].z + j;
+                if (this->VerticesIndex[i].z + j == this->VerticesIndex[i].w)
+                    break;
+                xmfFile << " ";
+                // std::cout << this->VerticesIndex[i].x + j << ", " << this->VerticesIndex[i].y << std::endl;
+            }
+            xmfFile << "\n";
+
+            ScalarConductivityTruncated[countergg] = this->Conductivity[i];
+            ScalarApertureTruncated[countergg] = this->Aperture[i];
+            ScalarClusterIDTruncated[countergg] = ScalarValue_cluster[i];
+            countergg++;
+        }
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Topology>\n";
+
+        std::string New_hdf5 = "TruncatedFracturesConductivityApertureClusterID_" + HDF5filename;
+
+        cuDFNsys::WriteDoubleToHDF5(New_hdf5, "Conductivity", ScalarConductivityTruncated.data(), ScalarConductivityTruncated.size(), false);
+        cuDFNsys::WriteDoubleToHDF5(New_hdf5, "Aperture", ScalarApertureTruncated.data(), ScalarApertureTruncated.size(), true);
+        cuDFNsys::WriteIntToHDF5(New_hdf5, "ClusterID", ScalarClusterIDTruncated.data(), ScalarClusterIDTruncated.size(), true);
+
+        xmfFile << "      <Attribute Name=\"Conductivity\" AttributeType=\"Scalar\" Center=\"Cell\">\n";
+        xmfFile << "        <DataItem Dimensions=\"" << NumTruncatedFractures << "\" Format=\"HDF\" NumberType=\"Float\" Precision=\"8\">\n";
+        xmfFile << "          " << New_hdf5 << ":/Conductivity\n";
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Attribute>\n";
+
+        xmfFile << "      <Attribute Name=\"Aperture\" AttributeType=\"Scalar\" Center=\"Cell\">\n";
+        xmfFile << "        <DataItem Dimensions=\"" << NumTruncatedFractures << "\" Format=\"HDF\" NumberType=\"Float\" Precision=\"8\">\n";
+        xmfFile << "          " << New_hdf5 << ":/Aperture\n";
+        xmfFile << "        </DataItem>\n";
+        xmfFile << "      </Attribute>\n";
+
+        xmfFile << "      <Attribute Name=\"ClusterID\" AttributeType=\"Scalar\" Center=\"Cell\">\n";
+        xmfFile << "        <DataItem Dimensions=\"" << NumTruncatedFractures << "\" Format=\"HDF\" NumberType=\"Float\" Precision=\"8\">\n";
+        xmfFile << "          " << New_hdf5 << ":/ClusterID\n";
         xmfFile << "        </DataItem>\n";
         xmfFile << "      </Attribute>\n";
 

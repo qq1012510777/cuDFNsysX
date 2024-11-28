@@ -7,9 +7,7 @@
 
 __host__ __device__ bool IsEqual(const double3 &a, const double3 &b, double tolerance = 0)
 {
-    return fabs(a.x - b.x) < tolerance &&
-           fabs(a.y - b.y) < tolerance &&
-           fabs(a.z - b.z) < tolerance;
+    return Double3Norm(a - b) < tolerance;
 }
 
 __host__ double3 ComputeCentroid(const thrust::host_vector<double3> &points)
@@ -26,6 +24,7 @@ __host__ thrust::host_vector<double3> CorrectPolygon(const thrust::host_vector<d
 {
     // Step 1: Remove duplicates
     thrust::host_vector<double3> uniquePoints;
+    uniquePoints.reserve(points.size());
     for (const auto &p : points)
     {
         if (std::none_of(uniquePoints.begin(), uniquePoints.end(),
@@ -35,7 +34,7 @@ __host__ thrust::host_vector<double3> CorrectPolygon(const thrust::host_vector<d
             uniquePoints.push_back(p);
         }
     }
-
+    uniquePoints.shrink_to_fit();
     // Step 2: Compute centroid
     double3 centroid = ComputeCentroid(uniquePoints);
 

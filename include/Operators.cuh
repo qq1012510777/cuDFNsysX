@@ -43,6 +43,13 @@ __host__ __device__ double3 operator+(const double3 &vec, const double3 &vec2)
 // int2
 std::ostream &operator<<(std::ostream &os, const int2 &v)
 {
-    os << "(" << v.x << ", " << v.y << ")";
+    os << v.x << ", " << v.y << ";";
+    return os;
+}
+
+// int4
+std::ostream &operator<<(std::ostream &os, const int4 &v)
+{
+    os << v.x << ", " << v.y << ", " << v.z << ", " << v.w << ";";
     return os;
 }

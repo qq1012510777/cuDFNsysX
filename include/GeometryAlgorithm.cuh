@@ -51,80 +51,104 @@ namespace cuDFNsys
         return t > EPSILON; // Intersection detected
     };
 
+    __host__ __device__ void CalculatePlaneCoefficients(
+        const double3 &P1, const double3 &P2, const double3 &P3,
+        double &A, double &B, double &C, double &D)
+    {
+        // Compute vectors
+        double3 V1 = P2 - P1;
+        double3 V2 = P3 - P1;
+        // V1 = V1 / Double3Norm(V1);
+        // V2 = V2 / Double3Norm(V2);
+
+        // Compute the normal vector (A, B, C)
+        double3 N = Double3CrossProduct(V1, V2);
+        // N = N / Double3Norm(N);
+
+        A = N.x;
+        B = N.y;
+        C = N.z;
+
+        // Compute D using P1
+        D = -(A * P1.x + B * P1.y + C * P1.z);
+    }
+
     __host__ __device__ bool TrianglesIntersect(const double3 *triangle1, const double3 *triangle2)
     {
-        // Unpack triangle vertices
-        const double3 &p1 = triangle1[0];
-        const double3 &q1 = triangle1[1];
-        const double3 &r1 = triangle1[2];
+        for (int i = 0; i < 3; ++i)
+            printf("%.40f, %.40f, %.40f\n", triangle1[i].x, triangle1[i].y, triangle1[i].z);
+        for (int i = 0; i < 3; ++i)
+            printf("%.40f, %.40f, %.40f\n", triangle2[i].x, triangle2[i].y, triangle2[i].z);
+        printf("-------------------------\n\n");
+        double3 e1 = triangle1[1] - triangle1[0]; // Edge 1 of triangle1
+        double3 e2 = triangle1[2] - triangle1[0]; // Edge 2 of triangle1
+        double3 n1 = Double3CrossProduct(e1, e2); // Normal vector of triangle1
 
-        const double3 &p2 = triangle2[0];
-        const double3 &q2 = triangle2[1];
-        const double3 &r2 = triangle2[2];
+        double3 e3 = triangle2[1] - triangle2[0]; // Edge 1 of triangle2
+        double3 e4 = triangle2[2] - triangle2[0]; // Edge 2 of triangle2
+        double3 n2 = Double3CrossProduct(e3, e4); // Normal vector of triangle2
 
-        // Compute triangle normals
-        double3 normal1 = Double3CrossProduct(q1 - p1, r1 - p1);
-        double3 normal2 = Double3CrossProduct(q2 - p2, r2 - p2);
+        // Plane equation tests
+        double d1 = Double3Dot(n1, triangle1[0]);
+        double d2 = Double3Dot(n2, triangle2[0]);
 
-        // Compute signed distances of triangle2 vertices relative to triangle1's plane
-        double dp2 = Double3Dot(normal1, p2 - p1);
-        double dq2 = Double3Dot(normal1, q2 - p1);
-        double dr2 = Double3Dot(normal1, r2 - p1);
+        // Test triangle1 vertices against triangle2's plane
+        double dist0 = Double3Dot(n2, triangle1[0]) - d2;
+        double dist1 = Double3Dot(n2, triangle1[1]) - d2;
+        double dist2 = Double3Dot(n2, triangle1[2]) - d2;
 
-        // If all points of triangle2 are on the same side of triangle1's plane, no intersection
-        if ((dp2 > 0 && dq2 > 0 && dr2 > 0) || (dp2 < 0 && dq2 < 0 && dr2 < 0))
+        if (dist0 * dist1 > 0.0 && dist0 * dist2 > 0.0)
             return false;
 
-        // Compute signed distances of triangle1 vertices relative to triangle2's plane
-        double dp1 = Double3Dot(normal2, p1 - p2);
-        double dq1 = Double3Dot(normal2, q1 - p2);
-        double dr1 = Double3Dot(normal2, r1 - p2);
+        // Test triangle2 vertices against triangle1's plane
+        double dist3 = Double3Dot(n1, triangle2[0]) - d1;
+        double dist4 = Double3Dot(n1, triangle2[1]) - d1;
+        double dist5 = Double3Dot(n1, triangle2[2]) - d1;
 
-        // If all points of triangle1 are on the same side of triangle2's plane, no intersection
-        if ((dp1 > 0 && dq1 > 0 && dr1 > 0) || (dp1 < 0 && dq1 < 0 && dr1 < 0))
+        // printf("%.20f, %.20f, %20f ; %.20f, %.20f, %20f\n", dist0,
+        //        dist1,
+        //        dist2,
+        //        dist3,
+        //        dist4,
+        //        dist5);
+
+        if (dist3 * dist4 > 0.0 && dist3 * dist5 > 0.0)
             return false;
+        // Compute intersection line direction
+        double3 dir = Double3CrossProduct(n1, n2);
+        dir = dir / Double3Norm(dir);
 
-        // Edge-edge intersection tests
-        const double3 edges1[] = {q1 - p1, r1 - q1, p1 - r1};
-        const double3 edges2[] = {q2 - p2, r2 - q2, p2 - r2};
-
+        // Project triangle1 vertices onto the intersection line
+        double proj1[3];
         for (int i = 0; i < 3; ++i)
         {
-            for (int j = 0; j < 3; ++j)
-            {
-                double3 axis = Double3CrossProduct(edges1[i], edges2[j]);
-
-                // Skip degenerate axes
-                if (Double3Norm(axis) < 1e-6)
-                    continue;
-
-                double min1 = INFINITY, max1 = -INFINITY;
-                double min2 = INFINITY, max2 = -INFINITY;
-
-                // Project triangle1 vertices onto the axis
-                for (const double3 &v : {p1, q1, r1})
-                {
-                    double proj = Double3Dot(v, axis);
-                    min1 = fmin(min1, proj);
-                    max1 = fmax(max1, proj);
-                }
-
-                // Project triangle2 vertices onto the axis
-                for (const double3 &v : {p2, q2, r2})
-                {
-                    double proj = Double3Dot(v, axis);
-                    min2 = fmin(min2, proj);
-                    max2 = fmax(max2, proj);
-                }
-
-                // Check if projections overlap
-                if (max1 < min2 || max2 < min1)
-                    return false;
-            }
+            proj1[i] = Double3Dot(dir, triangle1[i]);
         }
 
-        // All tests passed; triangles intersect
-        return true;
+        // Project triangle2 vertices onto the intersection line
+        double proj2[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            proj2[i] = Double3Dot(dir, triangle2[i]);
+        }
+
+        // Find projection intervals
+        double min1 = fmin(fmin(proj1[0], proj1[1]), proj1[2]);
+        double max1 = fmax(fmax(proj1[0], proj1[1]), proj1[2]);
+
+        double min2 = fmin(fmin(proj2[0], proj2[1]), proj2[2]);
+        double max2 = fmax(fmax(proj2[0], proj2[1]), proj2[2]);
+
+        // Check if projection intervals overlap
+        return (fmax(min1, max1) >= fmin(min2, max2) && fmax(min2, max2) >= fmin(min1, max1));
+    }
+
+    __host__ __device__ bool ArePointsCollinear(const double3 &A, const double3 &B, const double3 &C, double epsilon = 1e-8)
+    {
+        double3 AB = B - A;
+        double3 AC = C - A;
+        double3 cross = Double3CrossProduct(AB, AC);
+        return Double3Norm(cross) < epsilon; // Check if the cross product's magnitude is near zero
     }
 
     // Main Polygon-Polygon Intersection Test
@@ -133,25 +157,45 @@ namespace cuDFNsys
         const double3 *Vertices_Polygon1, const double3 *Vertices_Polygon2,
         const int NumVertices_Polygon1, const int NumVertices_Polygon2)
     {
+        double CollinearEPSILON = 1e-3;
         // Iterate over all triangle pairs from the two polygons
         for (int i = 0; i < NumVertices_Polygon1 - 2; ++i)
         {
+            if (ArePointsCollinear(Vertices_Polygon1[0], Vertices_Polygon1[i + 1], Vertices_Polygon1[i + 2], CollinearEPSILON))
+                continue;
+
+            const double3 V1[3] = {Vertices_Polygon1[0], Vertices_Polygon1[i + 1], Vertices_Polygon1[i + 2]};
+
             for (int j = 0; j < NumVertices_Polygon2 - 2; ++j)
             {
-                const double3 *V1[3] = {&Vertices_Polygon1[0], &Vertices_Polygon1[i + 1], &Vertices_Polygon1[i + 2]};
-                const double3 *V2[3] = {&Vertices_Polygon2[0], &Vertices_Polygon2[j + 1], &Vertices_Polygon2[j + 2]};
 
-                // double3 V1[3] = {make_double3(-11.194467308199275, 30.016399834222312, 88.73795816690222),
-                //                  make_double3(2.424293150903748, 8.642098266568603, 80.16985476223483),
-                //                  make_double3(10.238139329403761, 21.4950350078845, 102.29426718207047)};
+                if (ArePointsCollinear(Vertices_Polygon2[0], Vertices_Polygon2[j + 1], Vertices_Polygon2[j + 2], CollinearEPSILON))
+                    continue;
+
+                const double3 V2[3] = {Vertices_Polygon2[0], Vertices_Polygon2[j + 1], Vertices_Polygon2[j + 2]};
+                // printf("%d -  %d\n", i, j);
+
+                // double3 V1[3] = {make_double3(1.000000000000000000000000000000, 0.443320452273296028433691162718, 0.000000000000000000000000000000),
+                //                  make_double3(0.669065646357200338734116940032, 1.000000000000000000000000000000, 0.330934353642799661265883059968),
+                //                  make_double3(0.316041686360868157024128777266, 1.000000000000000000000000000000, 0.000000000000000000000000000000)};
                 // double3 V2[3] = {
-                //     make_double3(31.080304930514355, 96.77713966099772, 29.648916007562498),
-                //     make_double3(19.31127382807052, 91.81921927419917, 6.401495649195706),
-                //     make_double3(45.21811656200058, 87.01105530631769, 9.442988668768649)};
+                //     make_double3(0.690740882962605162731506425189, 0.690740882962605162731506425189, 0.000000000000000000000000000000),
+                //     make_double3(0.755442582729919487327663318865, 1.000000000000000000000000000000, 0.000000000000000000000000000000),
+                //     make_double3(0.000000000000000000000000000000, 1.000000000000000000000000000000, 0.684407326723559861214596367063)};
+                // printf("~%d\n", cuDFNsys::TrianglesIntersect(
+                //                     V1, V2));
                 if (cuDFNsys::TrianglesIntersect(
-                        *V1, *V2))
-                    return true; // Intersection found
+                        V1, V2))
+                {
+                    printf("Intsected~~~~~\n\n");
+                    return true;
+                } // Intersection found
+                else
+                {
+                    printf("Not !! Intsected~~~~~\n\n");
+                }
             }
+            // printf("\n\n\n\n");
         }
         return false; // No intersection
     }
